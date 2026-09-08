@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nebraska Lobbying</title>
+<meta name="description" content="Which interests registered support, opposition or neutrality on Nebraska legislative bills, from the Clerk of the Legislature's lobbyist reporting system.">
+<style>
+  :root {
+    --bg:#fff; --panel:#f6f7f9; --border:#d9dde3; --text:#14181d; --muted:#626b76;
+    --accent:#d00000; --accent-soft:#fdecec; --shadow:0 1px 3px rgba(0,0,0,.08);
+    --support:#1c7f4e; --oppose:#b3261e; --neutral:#626b76;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#14171a; --panel:#1c2025; --border:#2c323a; --text:#e6e9ed;
+      --muted:#949dab; --accent:#ff6b6b; --accent-soft:#2a1c1d;
+      --shadow:0 1px 3px rgba(0,0,0,.4);
+      --support:#4cc38a; --oppose:#ff8a80; --neutral:#949dab;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:82ch;margin:0 auto;padding:26px 20px 60px}
+  h1{margin:0 0 6px;font-size:22px;letter-spacing:-.01em}
+  h2{margin:30px 0 10px;font-size:15px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted)}
+  p{margin:0 0 12px}
+  .lede{color:var(--muted)}
+  .stats{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:4px;
+    padding:8px 12px;min-width:126px;box-shadow:var(--shadow)}
+  .stat b{display:block;font-size:18px;letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums}
+  .stat span{color:var(--muted);font-size:12px}
+  table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0 16px}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;
+    letter-spacing:.04em}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .s{color:var(--support)} .o{color:var(--oppose)} .x{color:var(--neutral)}
+  .warn{background:var(--accent-soft);border-left:3px solid var(--accent);
+    border-radius:3px;padding:10px 12px;margin:14px 0}
+  .warn strong{color:var(--accent)}
+  ul{margin:0 0 12px;padding-left:20px}
+  li{margin-bottom:7px}
+  a{color:var(--accent)}
+  footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--border);
+    color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Nebraska Lobbying</h1>
+  <p class="lede">Which private interests registered <span class="s">support</span>,
+  <span class="o">opposition</span> or <span class="x">neutrality</span> on
+  specific Nebraska bills, from the
+  <a href="https://nebraskalegislature.gov/lobbyist/">Clerk of the Legislature's
+  lobbyist reporting system</a>. This is the only Nebraska public dataset that ties
+  a private interest to a named piece of legislation. Cross-source search is in the
+  <a href="../ne-connect/">Public Records Hub</a>.</p>
+
+  <div class="stats">
+    <div class="stat"><b>27,512</b><span>registered positions</span></div>
+    <div class="stat"><b>842</b><span>bills with filings</span></div>
+    <div class="stat"><b>650</b><span>principals</span></div>
+    <div class="stat"><b>409</b><span>lobbyists</span></div>
+    <div class="stat"><b>11,378</b><span>support</span></div>
+    <div class="stat"><b>6,799</b><span>oppose</span></div>
+    <div class="stat"><b>9,335</b><span>neutral</span></div>
+  </div>
+
+  <div class="warn">
+    <strong>Collection is about 9% complete.</strong> 853 bill numbers
+    swept (LB only, session
+    109) out of roughly
+    9,200 across every session the system covers. Everything below is
+    real; there is simply more of it not yet collected. Absence here is not
+    evidence that an interest took no position.
+  </div>
+
+  <h2>Most-lobbied bills collected so far</h2>
+  <table>
+    <tr><th>Bill</th><th class="n">Positions</th><th class="n">Support</th>
+    <th class="n">Oppose</th><th class="n">Neutral</th></tr>
+    <tr><td>LB264</td><td class='n'>232</td><td class='n s'>33</td><td class='n o'>117</td><td class='n x'>82</td></tr><tr><td>LB677</td><td class='n'>221</td><td class='n s'>66</td><td class='n o'>39</td><td class='n x'>116</td></tr><tr><td>LB468</td><td class='n'>206</td><td class='n s'>56</td><td class='n o'>97</td><td class='n x'>53</td></tr><tr><td>LB415</td><td class='n'>190</td><td class='n s'>88</td><td class='n o'>59</td><td class='n x'>43</td></tr><tr><td>LB650</td><td class='n'>172</td><td class='n s'>38</td><td class='n o'>88</td><td class='n x'>46</td></tr><tr><td>LB261</td><td class='n'>171</td><td class='n s'>59</td><td class='n o'>48</td><td class='n x'>64</td></tr><tr><td>LB304</td><td class='n'>169</td><td class='n s'>108</td><td class='n o'>11</td><td class='n x'>50</td></tr><tr><td>LB170</td><td class='n'>148</td><td class='n s'>28</td><td class='n o'>81</td><td class='n x'>39</td></tr><tr><td>LB169</td><td class='n'>145</td><td class='n s'>26</td><td class='n o'>59</td><td class='n x'>60</td></tr><tr><td>LB258</td><td class='n'>138</td><td class='n s'>25</td><td class='n o'>81</td><td class='n x'>32</td></tr>
+  </table>
+
+  <h2>Most active principals</h2>
+  <table>
+    <tr><th>Principal</th><th class="n">Positions</th></tr>
+    <tr><td>ACLU Nebraska</td><td class='n'>1957</td></tr><tr><td>Lindsay Harr MacDonald</td><td class='n'>1545</td></tr><tr><td>Edwards Westerhold Moore</td><td class='n'>1527</td></tr><tr><td>Stilmock McIntosh Government Relations, LLC</td><td class='n'>1480</td></tr><tr><td>Nebraska Association of County Officials</td><td class='n'>1019</td></tr><tr><td>Kissel Kohout ES Associates, LLC</td><td class='n'>928</td></tr><tr><td>Nebraska Farm Bureau Federation</td><td class='n'>814</td></tr><tr><td>Radcliffe Gilbertson & Brady</td><td class='n'>799</td></tr><tr><td>Nebraska Bankers Association</td><td class='n'>580</td></tr><tr><td>Nebraska Chamber of Commerce & Industry</td><td class='n'>456</td></tr>
+  </table>
+
+  <h2>Read this before quoting it</h2>
+  <ul>
+    <li><strong>The site truncates names in its own markup.</strong> The bill table
+    really does publish "Associated Beverage Distributors of&hellip;" &mdash; 28% of
+    a sample arrived cut short, and the full name appears nowhere on that page.
+    Every row here carries the numeric principal and lobbyist IDs, and names are
+    resolved from each principal's own detail page.</li>
+    <li><strong>Rows that look identical usually are not.</strong> One lobbyist can
+    file more than once for the same principal on the same bill; the rows differ
+    only by registration ID. Deduplicating on the visible columns destroys real
+    records.</li>
+    <li><strong>"Neutral" is a real position, and it is common.</strong> Registering
+    neutral on a bill is not the same as not registering.</li>
+    <li><strong>Electronic filings begin in 2015.</strong> Earlier documents were
+    not filed electronically; the Clerk provides them on request.</li>
+    <li><strong>A registered position is not a vote and not an outcome.</strong> It
+    records what an interest told the Legislature it wanted.</li>
+  </ul>
+
+  <footer>
+    Built 2026-09-08; last collected 2026-09-08.
+    Method, caveats and open work are in the
+    <a href="https://github.com/diepjustin/diepjustin.github.io/tree/main/ne-lobbying">project README</a>.
+    No analytics, no tracking, nothing loads from a third party.
+  </footer>
+</div>
+</body>
+</html>

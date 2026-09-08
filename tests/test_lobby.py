@@ -135,3 +135,25 @@ def test_default_delay_is_conservative():
     from lobby import DEFAULT_DELAY
 
     assert DEFAULT_DELAY >= 2.0
+
+
+def test_windowed_pager_is_followed_past_the_first_window():
+    """The pager only ever shows the next few pages, never the true last.
+
+    Trusting page 1's highest link capped 52 busy bills at exactly 75 rows --
+    15 per page times the 5 pages page 1 happened to advertise. parse must
+    report what THIS page links to, so the fetcher can extend the ceiling as it
+    goes rather than stopping at the first window.
+    """
+    window_1 = '<div class="main-content"><table><tr><th>Lobbyist</th></tr></table>' \
+               '<a href="?page=2">2</a><a href="?page=5">5</a></div>'
+    window_2 = '<div class="main-content"><table><tr><th>Lobbyist</th></tr></table>' \
+               '<a href="?page=6">6</a><a href="?page=9">9</a></div>'
+    assert parse_bill_positions(window_1)[1] == 5
+    assert parse_bill_positions(window_2)[1] == 9
+
+
+def test_page_cap_exists_so_a_broken_pager_cannot_loop_forever():
+    from lobby import MAX_PAGES_PER_BILL
+
+    assert MAX_PAGES_PER_BILL >= 20

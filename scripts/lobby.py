@@ -66,6 +66,10 @@ MAX_RETRIES = 4
 # work, large enough not to rewrite the progress file constantly.
 FLUSH_EVERY = 25
 
+# Safety stop for the windowed pager below. The busiest real bill sits far under
+# this; the cap only exists so a pager that never terminates cannot loop forever.
+MAX_PAGES_PER_BILL = 60
+
 # Session codes from the Legislature select, newest first. 110 (2027-2028) has
 # not convened, so it is listed but not swept by default.
 LEGISLATURES = ["109", "108-3", "108", "107-1", "107", "106", "105"]
@@ -323,11 +327,22 @@ def fetch_bill_positions(fetcher: Fetcher, legislature: str, prefix: str, number
         return params
 
     rows, last_page = parse_bill_positions(fetcher.get("view.php", page_params(1)))
-    for page_number in range(2, last_page + 1):
-        more, _ = parse_bill_positions(fetcher.get("view.php", page_params(page_number)))
+
+    # The pager is WINDOWED: page 1 links to 2-5, page 5 links to 6-9, and so on.
+    # Trusting page 1's highest link stopped every busy bill at exactly 5 pages --
+    # 52 bills landed on precisely 75 rows and none above it, which is a ceiling,
+    # not a coincidence. So re-read the pager on every page and keep going until a
+    # page comes back empty.
+    page_number = 1
+    while page_number < last_page and page_number < MAX_PAGES_PER_BILL:
+        page_number += 1
+        more, seen_last = parse_bill_positions(
+            fetcher.get("view.php", page_params(page_number))
+        )
         if not more:
             break
         rows.extend(more)
+        last_page = max(last_page, seen_last)
     return rows
 
 
