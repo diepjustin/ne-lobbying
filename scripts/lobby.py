@@ -130,10 +130,23 @@ class Fetcher:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session.headers["User-Agent"] = USER_AGENT
 
+    def post(self, path: str, data, params: dict = None) -> str:
+        """POST with the same politeness, caching and backoff as get().
+
+        The expense reports are a POST form, and the cache key has to include
+        the body or every year of every entity would collide on one entry.
+        `data` is a list of (name, value) pairs, not a dict: the form repeats
+        Category[] and LobbyistID[], which a dict cannot express.
+        """
+        return self._fetch(path, params=params, data=list(data))
+
     def get(self, path: str, params: dict = None) -> str:
+        return self._fetch(path, params=params, data=None)
+
+    def _fetch(self, path: str, params: dict = None, data=None) -> str:
         url = f"{BASE}/{path}"
         key = hashlib.sha256(
-            f"{url}?{sorted((params or {}).items())}".encode("utf-8")
+            f"{url}?{sorted((params or {}).items())}|{data}".encode("utf-8")
         ).hexdigest()[:20]
         cached = self.cache_dir / f"{key}.html"
 
@@ -147,7 +160,11 @@ class Fetcher:
             time.sleep(self.delay)
 
         for attempt in range(MAX_RETRIES):
-            response = self.session.get(url, params=params, timeout=45)
+            response = (
+                self.session.post(url, params=params, data=data, timeout=45)
+                if data is not None
+                else self.session.get(url, params=params, timeout=45)
+            )
             if response.status_code != 429:
                 response.raise_for_status()
                 self.requests_made += 1

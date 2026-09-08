@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 POSITIONS = ROOT / "data" / "bill_positions.csv"
 PROGRESS = ROOT / "data" / "scrape_progress.json"
 DETAILS = ROOT / "data" / "principal_details.csv"
+STATEWIDE = ROOT / "data" / "expenses_statewide.csv"
 OUT = ROOT / "index.html"
 
 # Every regular session runs to about LB1300 and LR500; specials to a few dozen.
@@ -122,6 +123,47 @@ def main() -> int:
 
     pct = swept / PLANNED_BILLS if PLANNED_BILLS else 0
 
+    # Form B line 1 is what lobbyists reported being paid, statewide, per year.
+    # Cheap to collect (one request per year) and a real series on its own.
+    compensation = {}
+    if STATEWIDE.exists():
+        with STATEWIDE.open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                if row["form"] == "B" and row["category"].startswith("1."):
+                    compensation[int(row["year"])] = float(row["amount"])
+
+    spend_rows = "".join(
+        f"<tr><td>{year}</td><td class='n'>${compensation[year]:,.0f}</td></tr>"
+        for year in sorted(compensation)
+    )
+    spend_section = ""
+    if compensation:
+        latest = max(compensation)
+        # The current year is still accruing filings, so it is not comparable.
+        closed = [y for y in sorted(compensation) if y < latest]
+        growth = ""
+        if len(closed) >= 2:
+            first, last = closed[0], closed[-1]
+            change = compensation[last] / compensation[first] - 1
+            growth = (
+                f" Reported compensation rose {change:.0%} between {first} and "
+                f"{last}, from ${compensation[first]:,.0f} to "
+                f"${compensation[last]:,.0f}."
+            )
+        spend_section = f"""
+  <h2>What lobbying costs, statewide</h2>
+  <p>Compensation lobbyists reported receiving, from Form B line 1, across every
+  filer in the state.{growth} {latest} is still accruing filings and is not
+  comparable to a closed year.</p>
+  <table>
+    <tr><th>Year</th><th class="n">Reported compensation</th></tr>
+    {spend_rows}
+  </table>
+  <p>These are statewide totals. Per-lobbyist and per-principal figures need one
+  request per entity per year &mdash; the report aggregates whatever it is asked
+  for rather than breaking it down &mdash; so they are collected separately for
+  the entities that appear elsewhere in the project.</p>"""
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -174,6 +216,8 @@ def main() -> int:
     {principal_rows}
   </table>
 
+  {spend_section}
+
   <h2>Read this before quoting it</h2>
   <ul>
     <li><strong>The site truncates names in its own markup.</strong> The bill table
@@ -191,6 +235,10 @@ def main() -> int:
     not filed electronically; the Clerk provides them on request.</li>
     <li><strong>A registered position is not a vote and not an outcome.</strong> It
     records what an interest told the Legislature it wanted.</li>
+    <li><strong>Expense figures are self-reported quarterly totals,</strong> not
+    audited spending, and Form B (what a lobbyist received) and Form C (what a
+    principal paid) describe the same money from two sides &mdash; adding them
+    together double-counts it.</li>
   </ul>
 
   <footer>

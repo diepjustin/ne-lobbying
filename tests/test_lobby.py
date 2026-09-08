@@ -114,7 +114,11 @@ def test_cache_hit_makes_no_request(tmp_path):
     from lobby import BASE
 
     url = f"{BASE}/view.php"
-    digest = hashlib.sha256(f"{url}?{sorted({'a': '1'}.items())}".encode()).hexdigest()[:20]
+    # The key includes the request body, so a GET and a POST to the same URL
+    # cannot collide -- every expense report is a POST to one endpoint.
+    digest = hashlib.sha256(
+        f"{url}?{sorted({'a': '1'}.items())}|None".encode()
+    ).hexdigest()[:20]
     (tmp_path / f"{digest}.html").write_text("cached body", encoding="utf-8")
 
     fetcher.session = Boom()
