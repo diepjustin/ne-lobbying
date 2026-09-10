@@ -160,3 +160,126 @@ def test_page_cap_exists_so_a_broken_pager_cannot_loop_forever():
     from lobby import MAX_PAGES_PER_BILL
 
     assert MAX_PAGES_PER_BILL >= 20
+
+
+# --- the network dropping is not a reason to lose a sweep --------------------
+
+
+class _Response:
+    status_code = 200
+    headers = {}
+    text = "<html>ok</html>"
+
+    def raise_for_status(self):
+        pass
+
+
+class _FlakySession:
+    """Raises `failures` times, then answers. Records how often it was asked."""
+
+    headers = {}
+
+    def __init__(self, failures, exc):
+        self.failures = failures
+        self.exc = exc
+        self.calls = 0
+
+    def get(self, *a, **k):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.exc
+        return _Response()
+
+    post = get
+
+
+def test_transient_network_errors_are_retried(tmp_path):
+    """Both real sweeps died on these with a traceback instead of a checkpoint."""
+    import requests
+
+    fetcher = Fetcher(delay=0, cache_dir=tmp_path)
+    fetcher.session = _FlakySession(2, requests.ConnectionError("Connection aborted"))
+    assert fetcher.get("view.php", {"a": "1"}) == "<html>ok</html>"
+    assert fetcher.network_retries == 2
+    assert fetcher.requests_made == 1
+
+
+def test_persistent_network_failure_stops_cleanly_like_a_429(tmp_path):
+    """Unreachable is-a RateLimited, so every caller that stops cleanly on a
+    429 stops cleanly on a dead network too -- no new except clauses to miss."""
+    import pytest
+    import requests
+
+    from lobby import MAX_RETRIES, RateLimited, Unreachable
+
+    fetcher = Fetcher(delay=0, cache_dir=tmp_path)
+    fetcher.session = _FlakySession(10**6, requests.ReadTimeout("read timed out"))
+    with pytest.raises(Unreachable) as caught:
+        fetcher.get("view.php", {"a": "1"})
+    assert isinstance(caught.value, RateLimited)
+    assert fetcher.network_retries == MAX_RETRIES
+    assert not list(tmp_path.glob("*.html"))  # nothing cached from a failure
+
+
+# --- a sweep says whether it finished ----------------------------------------
+
+
+class _StubFetcher:
+    """Stands in for Fetcher: every bill page is empty, or every call stops."""
+
+    requests_made = cache_hits = rate_limit_waits = network_retries = 0
+
+    def __init__(self, stop_with=None):
+        self.stop_with = stop_with
+
+    def get(self, path, params=None):
+        if self.stop_with is not None:
+            raise self.stop_with
+        return EMPTY_PAGE
+
+
+def test_progress_records_that_the_requested_sweep_finished(tmp_path):
+    from lobby import scrape_positions
+
+    progress = tmp_path / "progress.json"
+    summary = scrape_positions(
+        ["109"], max_number=2, out_dir=tmp_path, progress_path=progress,
+        fetcher=_StubFetcher(),
+    )
+    saved = load_progress(progress)
+    assert summary["outcome"] == "complete"
+    assert saved["complete"] is True
+    assert saved["legislatures_requested"] == ["109"]
+    assert saved["done"] == ["109/LB1", "109/LB2"]
+
+
+def test_a_sweep_stopped_by_the_server_is_not_complete(tmp_path):
+    """Before this, a sweep that stopped after one legislature and one that
+    finished all seven left identical progress files, and the chain script
+    treated both as done."""
+    from lobby import RateLimited, scrape_positions
+
+    progress = tmp_path / "progress.json"
+    summary = scrape_positions(
+        ["109", "108"], max_number=2, out_dir=tmp_path, progress_path=progress,
+        fetcher=_StubFetcher(stop_with=RateLimited("429")),
+    )
+    saved = load_progress(progress)
+    assert summary["outcome"] == "stopped"
+    assert saved["complete"] is False
+    assert saved["legislatures_requested"] == ["109", "108"]
+
+    # Rerunning with the server back finishes and flips the marker.
+    summary = scrape_positions(
+        ["109", "108"], max_number=2, out_dir=tmp_path, progress_path=progress,
+        fetcher=_StubFetcher(),
+    )
+    assert summary["outcome"] == "complete"
+    assert load_progress(progress)["complete"] is True
+
+
+def test_exit_status_tells_the_chain_what_happened():
+    """sweep_all.sh resumes on 2 and stops on 130; both must stay distinct."""
+    from lobby import OUTCOME_EXIT
+
+    assert OUTCOME_EXIT == {"complete": 0, "stopped": 2, "interrupted": 130}

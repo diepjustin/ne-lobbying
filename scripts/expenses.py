@@ -29,6 +29,15 @@ reported statewide was $26,896,980.66 in 2025).
 Usage:
     python scripts/expenses.py --aggregate                 # ~54 requests
     python scripts/expenses.py --entities --from-year 2015 # the scoped sweep
+
+Exit status follows lobby.py: 0 when every requested form finished, 2 when the
+server or the network stopped the run cleanly (rerun to resume), 130 on Ctrl-C.
+
+Write modes differ by output, and the difference is the dedup contract:
+  - statewide totals are REWRITTEN each run (one request per form-year, all
+    cached, so a rerun is free and the file is always exactly one pass)
+  - per-entity totals are APPENDED per entity-year token, and a token is never
+    fetched twice, so a resumed run adds only what the last one lacked
 """
 
 from __future__ import annotations
@@ -44,7 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lobby import DATA_DIR, Fetcher, RateLimited, _clean  # noqa: E402
+from lobby import DATA_DIR, OUTCOME_EXIT, Fetcher, RateLimited, _clean  # noqa: E402
 
 # Confirmed against the live form. Form B reports what a lobbyist received and
 # spent; Form C what a principal paid out. The lists differ by two fields.
@@ -144,31 +153,42 @@ def hub_entity_ids(form: str):
         return sorted({r[column] for r in csv.DictReader(fh) if r.get(column)})
 
 
-def load_progress():
-    if PROGRESS_PATH.exists():
-        return json.loads(PROGRESS_PATH.read_text())
+def load_progress(path: Path = None):
+    path = Path(path or PROGRESS_PATH)
+    if path.exists():
+        return json.loads(path.read_text())
     return {"done": []}
 
 
-def save_progress(progress):
-    PROGRESS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PROGRESS_PATH.write_text(json.dumps(progress, indent=2) + "\n")
+def save_progress(progress, path: Path = None):
+    path = Path(path or PROGRESS_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(progress, indent=2) + "\n")
 
 
-def write_rows(path: Path, rows, columns):
+def write_rows(path: Path, rows, columns, mode: str = "a"):
+    """Append rows, or with mode="w" replace the file with them.
+
+    An empty batch writes nothing in either mode: a rewrite that collected no
+    rows must not truncate the last good file.
+    """
     if not rows:
         return
     exists = path.exists()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="") as fh:
+    with path.open(mode, encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
-        if not exists:
+        if mode == "w" or not exists:
             writer.writeheader()
         writer.writerows(rows)
 
 
-def scrape_aggregate(fetcher: Fetcher, years) -> int:
-    """Statewide totals per year per form. Cheap, and quotable on its own."""
+def scrape_aggregate(fetcher: Fetcher, years, out_dir: Path = None) -> int:
+    """Statewide totals per year per form. Cheap, and quotable on its own.
+
+    Rewritten, not appended: there is no token to skip on, so appending doubled
+    the file every time the chain reran it (816 rows where 408 belonged).
+    """
     rows = []
     for form in ("B", "C"):
         for year in years:
@@ -177,22 +197,35 @@ def scrape_aggregate(fetcher: Fetcher, years) -> int:
                 rows.append({"form": form, "year": year, "category": label, "amount": amount})
             print(f"  form {form} {year}: {len(totals)} categories", flush=True)
     write_rows(
-        DATA_DIR / "expenses_statewide.csv", rows, ["form", "year", "category", "amount"]
+        Path(out_dir or DATA_DIR) / "expenses_statewide.csv", rows,
+        ["form", "year", "category", "amount"], mode="w",
     )
     return len(rows)
 
 
-def scrape_entities(fetcher: Fetcher, years, forms=("B", "C")) -> int:
-    """Per-entity totals, resumable. One request per entity-year, unavoidably."""
-    progress = load_progress()
+def scrape_entities(
+    fetcher: Fetcher, years, forms=("B", "C"), out_dir: Path = None, progress_path: Path = None,
+) -> dict:
+    """Per-entity totals, resumable. One request per entity-year, unavoidably.
+
+    Returns rows written, the outcome (see lobby.OUTCOME_EXIT) and, per form,
+    whether every entity-year requested was reached. The progress file keeps
+    `complete` per form so the chain can tell a finished Form B from one that
+    stopped 2,175 entity-years in; before this it could not.
+    """
+    out_dir = Path(out_dir or DATA_DIR)
+    progress = load_progress(progress_path)
     done = set(progress["done"])
+    complete = dict(progress.get("complete") or {})
     written = 0
+    outcome = "complete"
 
     for form in forms:
         ids = hub_entity_ids(form)
-        out = DATA_DIR / ("expenses_lobbyist.csv" if form == "B" else "expenses_principal.csv")
+        out = out_dir / ("expenses_lobbyist.csv" if form == "B" else "expenses_principal.csv")
         columns = ["form", "entity_id", "year", "category", "amount"]
         batch = []
+        finished = False
         print(f"form {form}: {len(ids)} entities x {len(years)} years", flush=True)
 
         try:
@@ -213,7 +246,7 @@ def scrape_entities(fetcher: Fetcher, years, forms=("B", "C")) -> int:
 
                     if len(done) % 50 == 0:
                         progress["done"] = sorted(done)
-                        save_progress(progress)
+                        save_progress(progress, progress_path)
                         write_rows(out, batch, columns)
                         written += len(batch)
                         batch = []
@@ -222,15 +255,26 @@ def scrape_entities(fetcher: Fetcher, years, forms=("B", "C")) -> int:
                             f"{fetcher.requests_made:,} requests",
                             flush=True,
                         )
-        except (KeyboardInterrupt, RateLimited) as exc:
-            print(f"\nstopping -- {exc or 'interrupted'}", file=sys.stderr)
+            finished = True
+        except KeyboardInterrupt:
+            outcome = "interrupted"
+            print("\ninterrupted -- saving what was collected", file=sys.stderr)
+        except RateLimited as exc:
+            outcome = "stopped"
+            print(f"\nstopping politely -- {exc}", file=sys.stderr)
         finally:
+            complete[form] = finished
             progress["done"] = sorted(done)
             progress["last_run"] = date.today().isoformat()
-            save_progress(progress)
+            progress["complete"] = complete
+            save_progress(progress, progress_path)
             write_rows(out, batch, columns)
             written += len(batch)
-    return written
+
+        if not finished:
+            # Told to stop: do not carry on to the next form and ask again.
+            break
+    return {"rows_written": written, "outcome": outcome, "complete": complete}
 
 
 def main(argv=None) -> int:
@@ -251,14 +295,23 @@ def main(argv=None) -> int:
     fetcher = Fetcher(delay=args.delay, refresh=args.refresh)
 
     written = 0
-    if args.aggregate:
-        written += scrape_aggregate(fetcher, years)
-    if args.entities:
-        written += scrape_entities(fetcher, years, tuple(args.forms))
+    outcome = "complete"
+    try:
+        if args.aggregate:
+            written += scrape_aggregate(fetcher, years)
+        if args.entities:
+            summary = scrape_entities(fetcher, years, tuple(args.forms))
+            written += summary["rows_written"]
+            outcome = summary["outcome"]
+    except RateLimited as exc:
+        # The aggregate pass has no checkpoint to keep; it is cheap to redo.
+        outcome = "stopped"
+        print(f"\nstopping politely -- {exc}", file=sys.stderr)
 
     print(f"  rows written      {written:>8,}")
     print(f"  requests / cached {fetcher.requests_made:>8,} / {fetcher.cache_hits:,}")
-    return 0
+    print(f"  outcome           {outcome:>8}")
+    return OUTCOME_EXIT[outcome]
 
 
 if __name__ == "__main__":

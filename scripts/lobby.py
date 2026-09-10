@@ -26,6 +26,10 @@ Guard rails, because this is a small government server:
   - one request per second by default, and every response cached on disk
   - a cached response is never re-fetched without --refresh
   - progress is checkpointed, so an interrupted run resumes instead of restarting
+  - a dropped connection or timeout is handled like a 429: back off, retry,
+    then stop cleanly with the checkpoint saved rather than die with a traceback
+  - the exit status says whether the requested sweep finished: 0 complete,
+    2 stopped by the server or the network (resume by rerunning), 130 interrupted
   - a full sweep is ~1,300 bills x 16 sessions ~= 20,000 requests, near six
     hours. Do not start one casually; use --limit to test first.
 """
@@ -113,6 +117,19 @@ class RateLimited(Exception):
     """The server asked us to stop. It is not an error; it is an instruction."""
 
 
+class Unreachable(RateLimited):
+    """The network gave out before the server could answer.
+
+    A reset connection, a read timeout or an exhausted local port looks nothing
+    like a 429, but the right response is identical: stop, keep the checkpoint,
+    resume later. Subclassing RateLimited means every caller that already stops
+    cleanly on a 429 stops cleanly on this too. Both sweeps that died in
+    September 2026 died on exactly these -- a ReadTimeout after legislature 109
+    and a ConnectionError 2,175 entity-years into Form B -- and each left a
+    traceback where a checkpoint should have been.
+    """
+
+
 @dataclass
 class Fetcher:
     """Polite, cached HTTP. Every network access in this project goes through it."""
@@ -124,6 +141,7 @@ class Fetcher:
     requests_made: int = 0
     cache_hits: int = 0
     rate_limit_waits: int = 0
+    network_retries: int = 0
 
     def __post_init__(self):
         self.cache_dir = Path(self.cache_dir or CACHE_DIR)
@@ -159,12 +177,28 @@ class Fetcher:
         if self.requests_made:
             time.sleep(self.delay)
 
+        unreachable = None  # the last network failure, if that is how we end
         for attempt in range(MAX_RETRIES):
-            response = (
-                self.session.post(url, params=params, data=data, timeout=45)
-                if data is not None
-                else self.session.get(url, params=params, timeout=45)
-            )
+            try:
+                response = (
+                    self.session.post(url, params=params, data=data, timeout=45)
+                    if data is not None
+                    else self.session.get(url, params=params, timeout=45)
+                )
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                # Same treatment as a 429. The network dropping is not a reason
+                # to lose a six-hour sweep; it is a reason to wait.
+                unreachable = exc
+                wait = self.delay * (2 ** (attempt + 1))
+                self.network_retries += 1
+                print(
+                    f"    {type(exc).__name__} -- waiting {wait:.0f}s (attempt {attempt + 1})",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+                continue
+
+            unreachable = None
             if response.status_code != 429:
                 response.raise_for_status()
                 self.requests_made += 1
@@ -177,6 +211,11 @@ class Fetcher:
             print(f"    429 -- waiting {wait:.0f}s (attempt {attempt + 1})", file=sys.stderr)
             time.sleep(wait)
 
+        if unreachable is not None:
+            raise Unreachable(
+                f"still unreachable after {MAX_RETRIES} attempts "
+                f"({type(unreachable).__name__}): {url}"
+            ) from unreachable
         raise RateLimited(f"still rate limited after {MAX_RETRIES} attempts: {url}")
 
 
@@ -374,18 +413,31 @@ def save_progress(progress: dict, path: Path = None):
     path.write_text(json.dumps(progress, indent=2) + "\n")
 
 
+# What a sweep reports about how it ended, and the exit status each maps to.
+# "stopped" is the server or the network setting a boundary; rerun to resume.
+OUTCOME_EXIT = {"complete": 0, "stopped": 2, "interrupted": 130}
+
+
 def scrape_positions(
     legislatures, max_number=None, prefixes=("LB",), delay=DEFAULT_DELAY,
     refresh=False, out_dir: Path = None, progress_path: Path = None, cache_dir: Path = None,
+    fetcher: Fetcher = None,
 ):
     """Sweep bills, collecting lobbyist positions. Resumable.
 
     Stops early and cleanly on Ctrl-C, having saved everything collected so far
     -- a six-hour scrape that loses its work on interrupt is a six-hour scrape
     nobody runs twice.
+
+    The progress file records whether the *requested* set of legislatures was
+    finished (`complete`) and which set that was (`legislatures_requested`).
+    Before this, a sweep that stopped on a 429 after one legislature and a
+    sweep that finished all seven left identical files, and the chain script
+    could not tell the difference -- so it did not, and six legislatures were
+    never started.
     """
     out_dir = Path(out_dir or DATA_DIR)
-    fetcher = Fetcher(delay=delay, refresh=refresh, cache_dir=cache_dir)
+    fetcher = fetcher or Fetcher(delay=delay, refresh=refresh, cache_dir=cache_dir)
 
     # A plain `kill` sends SIGTERM, which by default terminates without running
     # the finally block -- so the checkpoint never gets written and the work
@@ -402,6 +454,7 @@ def scrape_positions(
     progress = load_progress(progress_path)
     done = set(progress["done"])
     rows = []
+    outcome = "failed"  # only the loop finishing normally earns "complete"
 
     try:
         for legislature in legislatures:
@@ -433,16 +486,21 @@ def scrape_positions(
                             flush=True,
                         )
                         rows = []
+        outcome = "complete"
     except KeyboardInterrupt:
+        outcome = "interrupted"
         print("\ninterrupted -- saving what was collected", file=sys.stderr)
     except RateLimited as exc:
-        # Not a failure: the server set a boundary. Stop, keep the work, and
-        # let the next run resume from the checkpoint.
+        # Not a failure: the server (or the network) set a boundary. Stop,
+        # keep the work, and let the next run resume from the checkpoint.
+        outcome = "stopped"
         print(f"\nstopping politely -- {exc}", file=sys.stderr)
     finally:
         progress["done"] = sorted(done)
         progress["positions"] = progress.get("positions", 0) + len(rows)
         progress["last_run"] = date.today().isoformat()
+        progress["complete"] = outcome == "complete"
+        progress["legislatures_requested"] = list(legislatures)
         save_progress(progress, progress_path)
         _append_rows(out_dir / "bill_positions.csv", rows)
 
@@ -452,6 +510,8 @@ def scrape_positions(
         "requests_made": fetcher.requests_made,
         "cache_hits": fetcher.cache_hits,
         "rate_limit_waits": fetcher.rate_limit_waits,
+        "network_retries": fetcher.network_retries,
+        "outcome": outcome,
     }
 
 
@@ -547,8 +607,8 @@ def main(argv=None) -> int:
         delay=args.delay, refresh=args.refresh,
     )
     for label, value in summary.items():
-        print(f"  {label:16} {value:>8,}")
-    return 0
+        print(f"  {label:16} {value:>8}" if isinstance(value, str) else f"  {label:16} {value:>8,}")
+    return OUTCOME_EXIT[summary["outcome"]]
 
 
 if __name__ == "__main__":
