@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 from lobby import (
     Fetcher,
     load_progress,
