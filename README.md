@@ -1,7 +1,7 @@
 # Nebraska Lobbying
 
 Scraper for the Nebraska Legislature's [lobbyist reporting application](https://nebraskalegislature.gov/lobbyist/),
-built to feed [`ne-connect`](../ne-connect/). Own project, own caveats, per that
+built to feed [`ne-connect`](https://github.com/diepjustin/ne-connect). Own project, own caveats, per that
 project's architecture note.
 
 **Status: one legislature swept, expense sweep part way.** 33 tests. The 109th
