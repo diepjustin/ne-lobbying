@@ -49,11 +49,21 @@ run_until_complete() {
 }
 
 # Stop the whole chain on an interrupt; carry on past anything else so the
-# later stages still run against whatever the earlier ones managed.
+# later stages still run against whatever the earlier ones managed. But a
+# non-zero, non-interrupt exit means a stage did NOT finish -- record it so
+# the closing banner cannot claim a clean sweep when one stage actually
+# crashed (a crashed position sweep once fed silently into the expense
+# stages, and the final "all collection finished" line was taken at face
+# value as proof every legislature had been swept).
+FAILURES=()
 stop_if_interrupted() {
   if [ "$1" -eq 130 ]; then
     echo "=== chain interrupted at $(date) ==="
     exit 130
+  fi
+  if [ "$1" -ne 0 ]; then
+    echo "!!! stage exited $1 -- continuing with whatever data exists, but this run is INCOMPLETE" >&2
+    FAILURES+=("$1")
   fi
 }
 
@@ -84,4 +94,8 @@ run_until_complete $PY scripts/expenses.py --entities --from-year 2015 --delay 2
 stop_if_interrupted $?
 
 $PY scripts/check_data.py && $PY scripts/build_site.py || true
-echo "=== all collection finished at $(date) ==="
+if [ ${#FAILURES[@]} -eq 0 ]; then
+  echo "=== all collection finished cleanly at $(date) ==="
+else
+  echo "=== collection finished at $(date) WITH FAILURES (exit codes: ${FAILURES[*]}) -- data is INCOMPLETE, do not describe this run as complete ==="
+fi

@@ -76,7 +76,7 @@ MAX_PAGES_PER_BILL = 60
 
 # Session codes from the Legislature select, newest first. 110 (2027-2028) has
 # not convened, so it is listed but not swept by default.
-LEGISLATURES = ["109", "108-3", "108", "107-1", "107", "106", "105"]
+LEGISLATURES = ["109", "108-3", "108", "107-3", "107", "106", "105"]
 FUTURE_LEGISLATURES = ["110"]
 
 # How far to count per session. There is no way to detect the real ceiling: a
