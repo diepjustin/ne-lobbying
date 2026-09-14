@@ -1,0 +1,197 @@
+name: NE Lobbying nightly sweep
+
+on:
+  schedule:
+    # Both fire every night; the gate step lets through only the entry
+    # matching the current UTC offset, so exactly one does anything on any
+    # given night. Two entries exist because GitHub Actions cron is UTC-only
+    # with no DST awareness -- see ne-contracts' daily.yml for the incident
+    # that made gating on the fired cron entry (not the wall clock) the rule.
+    - cron: '0 8 * * *'   # 3am Central during CDT (UTC-5, 08:00 UTC)
+    - cron: '0 9 * * *'   # 3am Central during CST (UTC-6, 09:00 UTC)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write   # for `gh cache delete` cleanup
+
+concurrency:
+  group: ne-lobbying-daily
+  cancel-in-progress: false   # never cancel a run that might be mid-write to data/
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    # Nightly (expenses only) runs in minutes. Sunday adds a full re-sweep of
+    # the live legislature's positions (--refresh-legislature), which is
+    # bounded by --max-number rather than a hard time budget -- see the guard
+    # rails in README.md for why a full sweep is roughly a day.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pick the DST-correct cron entry, and today's tier
+        id: gate
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          offset=$(TZ=America/Chicago date +%z)
+          case "$offset" in
+            -0500) want='0 8 * * *' ;;   # CDT
+            -0600) want='0 9 * * *' ;;   # CST
+            *)     want='' ;;
+          esac
+
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ]; then
+            proceed=true
+          elif [ -n "$want" ] && [ "$SCHEDULE" = "$want" ]; then
+            proceed=true
+          else
+            proceed=false
+            echo "Central offset is $offset, so today's real run is cron '$want'; this run came from '$SCHEDULE'. Skipping."
+          fi
+
+          # Weekly: re-sweep the live legislature (109) for late-filed
+          # positions. Historical legislatures (108 and earlier) are frozen
+          # once swept -- see README.md "Coverage is 2015 onward" -- so they
+          # are never re-swept in CI.
+          weekly=false
+          if [ "$(TZ=America/Chicago date +%u)" = '7' ]; then
+            weekly=true
+          fi
+
+          # Monthly: upload a fresh backup release, same shape as the manual
+          # one at github.com/diepjustin/ne-lobbying/releases -- PLAN.md 0.5.
+          monthly=false
+          if [ "$(TZ=America/Chicago date +%d)" = '01' ]; then
+            monthly=true
+          fi
+
+          year=$(TZ=America/Chicago date +%Y)
+
+          echo "proceed=$proceed" >> "$GITHUB_OUTPUT"
+          echo "weekly=$weekly" >> "$GITHUB_OUTPUT"
+          echo "monthly=$monthly" >> "$GITHUB_OUTPUT"
+          echo "year=$year" >> "$GITHUB_OUTPUT"
+          echo "Central offset $offset -> proceed=$proceed weekly=$weekly monthly=$monthly year=$year"
+
+      - uses: actions/setup-python@v6
+        if: steps.gate.outputs.proceed == 'true'
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: steps.gate.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Tests
+        if: steps.gate.outputs.proceed == 'true'
+        run: python3 -m pytest tests/ -q
+
+      - name: Restore data/ cache
+        if: steps.gate.outputs.proceed == 'true'
+        id: restore
+        uses: actions/cache/restore@v5
+        with:
+          path: data
+          key: ne-lobbying-data-${{ github.run_id }}
+          restore-keys: |
+            ne-lobbying-data-
+
+      # A full sweep is ~a day (see README guard rails), so unlike campaign
+      # finance a cache miss here must NOT just redownload -- fall back to the
+      # last GitHub Release backup (PLAN.md 0.5) instead of starting cold.
+      - name: Restore from the release backup on a cache miss
+        if: steps.gate.outputs.proceed == 'true' && steps.restore.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo diepjustin/ne-lobbying --limit 20 --json tagName \
+                  --jq '[.[] | select(.tagName | startswith("lobbying-data-"))] | sort_by(.tagName) | last | .tagName')
+          if [ -z "$tag" ]; then
+            echo "::warning::no lobbying-data-* release found -- starting cold, positions will be empty until the next full sweep"
+            exit 0
+          fi
+          echo "cache miss -- restoring from release $tag"
+          mkdir -p data
+          gh release download "$tag" --repo diepjustin/ne-lobbying --pattern '*.gz' --dir data --clobber
+          for f in data/*.gz; do gunzip -f "$f"; done
+          ls -la data
+
+      - name: Statewide totals
+        if: steps.gate.outputs.proceed == 'true'
+        run: python3 scripts/expenses.py --aggregate --from-year 2015 --delay 2.5
+
+      # Only the current year, refreshed: a filing already swept in an
+      # earlier year is final, but the current year's totals can still change
+      # as principals file through it.
+      - name: Current-year entity expenses
+        if: steps.gate.outputs.proceed == 'true'
+        run: >
+          python3 scripts/expenses.py --entities
+          --from-year ${{ steps.gate.outputs.year }} --to-year ${{ steps.gate.outputs.year }}
+          --refresh --delay 2.0
+
+      - name: check_data.py (duplicate-key guard)
+        if: steps.gate.outputs.proceed == 'true'
+        run: python3 scripts/check_data.py
+
+      # Sunday only: re-sweep the live legislature for positions filed since
+      # the last pass. --refresh-legislature drops 109's checkpoint tokens and
+      # bypasses the cache for exactly those requests -- see lobby.py.
+      - name: Weekly re-sweep of the live legislature (Sundays)
+        if: steps.gate.outputs.proceed == 'true' && steps.gate.outputs.weekly == 'true'
+        run: >
+          python3 scripts/lobby.py --legislatures 109 --refresh-legislature
+          --prefixes LB LR --delay 2.0
+
+      - name: Rebuild the landing page
+        if: steps.gate.outputs.proceed == 'true'
+        run: python3 scripts/build_site.py
+
+      - name: Check data/ is worth caching
+        id: cachecheck
+        if: always() && steps.gate.outputs.proceed == 'true'
+        run: |
+          if ls data/bill_positions.csv >/dev/null 2>&1; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            du -sh data
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::data holds no bill_positions.csv -- skipping the cache save so the existing good cache stays the newest match."
+          fi
+
+      - name: Save data/ cache
+        if: always() && steps.cachecheck.outputs.ok == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: data
+          key: ne-lobbying-data-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Delete old data/ cache entries (keep newest 3)
+        if: always() && steps.cachecheck.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --key ne-lobbying-data- --json id,createdAt --limit 100 \
+            | jq -r 'sort_by(.createdAt) | reverse | .[3:] | .[].id' \
+            | xargs -r -n1 gh cache delete
+
+      # Monthly: publish a fresh backup release (PLAN.md 0.5's pattern),
+      # gzipped, same as the manual one. Runs even if the weekly re-sweep
+      # above didn't (only fires Sundays), so the backup always reflects
+      # whatever the nightly expense refresh most recently produced.
+      - name: Monthly backup release
+        if: always() && steps.cachecheck.outputs.ok == 'true' && steps.gate.outputs.monthly == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release
+          for f in data/*.csv data/*.json; do
+            [ -f "$f" ] && gzip -c "$f" > "release/$(basename "$f").gz"
+          done
+          tag="lobbying-data-$(TZ=America/Chicago date +%Y-%m-%d)"
+          gh release create "$tag" release/*.gz \
+            --repo diepjustin/ne-lobbying \
+            --title "Lobbying data — $(TZ=America/Chicago date +%Y-%m-%d)" \
+            --notes "Automated monthly backup. See PLAN.md 0.5."
