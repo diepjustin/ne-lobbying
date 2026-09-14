@@ -4,14 +4,25 @@ Scraper for the Nebraska Legislature's [lobbyist reporting application](https://
 built to feed [`ne-connect`](https://github.com/diepjustin/ne-connect). Own project, own caveats, per that
 project's architecture note.
 
-**Status: one legislature swept, expense sweep part way.** 33 tests. The 109th
-Legislature (LB and LR) yielded 39,909 position rows; the six earlier sessions
-in `LEGISLATURES` have not been started. Statewide Form B and Form C totals
-cover 2015–2026 (408 rows). The per-entity Form B sweep reached 2,175 of 5,412
-entity-years before the network dropped; Form C has not started. Both sweeps
-died on network errors the scraper did not catch — fixed on 10 Sep 2026, see
-guard rails — and resume from their checkpoints when `scripts/sweep_all.sh`
-is next run.
+**Status: fully swept.** 33 tests. All 7 legislatures in `LEGISLATURES` (109,
+108-3, 108, 107-3, 107, 106, 105) are complete: 291,078 position rows
+(208,225 distinct by `legislature, bill, registration_id, position`; 82,853
+are exact repeats the source itself lists twice — see caveats). Statewide
+Form B/C totals cover 2015–2026 (408 rows). The per-entity sweep is done too:
+12,636 Form B rows, 22,289 Form C rows, zero duplicate keys in any of the
+three (`check_data.py`).
+
+Getting here took two real bugs, both now fixed. First (10 Sep 2026): a
+dropped connection or read timeout crashed the scraper outright instead of
+retrying, so `sweep_all.sh` silently continued past a partial sweep — see
+guard rails. Second (13 Sep 2026): `LEGISLATURES` itself listed `"107-1"` for
+the 107th's special session; the site's own dropdown has no such session —
+the real code is `"107-3"`, matching the `108-3`/`102-3`/`101-3`/`100-3`
+pattern. Every bill lookup under the wrong code 500'd, which combined with
+the first bug to silently cap a "complete" sweep at 3 of 7 legislatures. Both
+are covered by the guard rails below and by `sweep_all.sh`'s exit-code
+handling, which now flags (rather than silently absorbs) any stage that
+doesn't exit 0/2/130.
 
 **Why this source matters more than its size suggests.** It is the only Nebraska
 public dataset that ties a private interest to a *specific bill*. Campaign
@@ -49,10 +60,10 @@ via `--roster`. Use these to resolve a truncated name from its id.
   on the visible columns destroys real records. But the Legislature's own bill
   pages also list some registrations twice, byte for byte (registration 20659
   appears as two identical rows on one page), and the scraper copies the page
-  rather than guessing which the state meant. Of the 39,909 rows for the 109th,
-  36,258 are distinct (legislature, bill, registration, position) and 3,651 are
-  exact repeats from the source. `scripts/check_data.py` reports that count;
-  subtract it before quoting a total number of positions.
+  rather than guessing which the state meant. Of 291,078 rows sitewide, 208,225
+  are distinct (legislature, bill, registration, position) and 82,853 are exact
+  repeats from the source. `scripts/check_data.py` reports that count; subtract
+  it before quoting a total number of positions.
 - **Most bills paginate.** Bills with filings typically run 3–6 pages. Reading
   only the first page — as the first version of this scraper did — silently
   drops most of the data. Fixing it roughly tripled the yield per bill.
@@ -114,17 +125,26 @@ be appended, and each rerun of the chain doubled it.
   legislatures were never started. Now a `ConnectionError` or `Timeout` backs
   off and retries like a 429, then raises `Unreachable` (a `RateLimited`), and
   the progress file records whether the requested set was actually finished.
-- **A full sweep is roughly 20,000 requests, near six hours** (~1,300 bills ×
-  16 sessions, times pagination). Do not start one casually. Use
+- **A full sweep is tens of thousands of requests, roughly a day unattended**
+  once pagination and rate-limit backoff are counted (the completed run took
+  the position stage plus both expense stages, spread over ~27 hours partly
+  because of heavy 429 throttling). Do not start one casually. Use
   `--max-number` to bound a test first.
+- **A wrong session code fails loud, not quiet, but only per-bill.** Every
+  legislature entry in `LEGISLATURES` should match a `value=` in the site's
+  own Legislature dropdown (`view.php?link=view_bill_search`) exactly — a
+  code the site doesn't recognize 500s on every bill number under it, which
+  looks identical in the log to a broken server until you check whether other
+  legislatures 500 too.
 
 ## Open work
 
-- Finish the sweeps: the six legislatures before the 109th, the rest of Form B,
-  all of Form C. Roughly 18 hours of unattended requests; `sweep_all.sh`
-  resumes each from its checkpoint.
 - Back the CSVs up as a GitHub Release rather than commits (they are gitignored
-  and exist only on one machine).
+  and exist only on one machine) — `PLAN.md` 0.5 in `ne-connect`.
+- Compute `lobbying_coverage()`'s reported figures from `bill_positions.csv`'s
+  actual distinct `(legislature, bill)` pairs rather than the resume
+  checkpoint's `done` count, which is authoritative for resuming but not
+  intended as a public coverage statistic.
 - Registration detail per lobbyist-year, including the principal relationships
   on the detail pages.
 - Feed `principal_id` into `ne-connect`'s resolution as a hard identifier — it
