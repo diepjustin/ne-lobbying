@@ -200,6 +200,15 @@ class Fetcher:
 
             unreachable = None
             if response.status_code != 429:
+                # Deliberately NOT caught here as a retryable/skippable condition.
+                # The one real 500 seen in production (2026-09-13, legislature
+                # "107-1") turned out to be a wrong session code, not a flaky
+                # server -- retrying or silently skipping it would have kept
+                # LEGISLATURES pointed at a code that will never work, rather
+                # than surfacing the actual bug. Letting it propagate and crash
+                # the sweep is correct; sweep_all.sh's exit-code handling now
+                # makes sure that crash can't be silently absorbed by later
+                # stages either way.
                 response.raise_for_status()
                 self.requests_made += 1
                 cached.write_text(response.text, encoding="utf-8")
