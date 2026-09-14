@@ -587,6 +587,12 @@ def main(argv=None) -> int:
     parser.add_argument("--prefixes", nargs="+", default=["LB"])
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
     parser.add_argument("--refresh", action="store_true", help="ignore the cache")
+    parser.add_argument(
+        "--refresh-legislature", action="store_true",
+        help="drop the given --legislatures' checkpoint tokens and re-fetch them "
+        "(bypasses the HTTP cache too, for exactly these requests) -- for catching a "
+        "late correction to a historical session without re-sweeping everything",
+    )
     parser.add_argument("--roster", action="store_true", help="fetch the name roster and exit")
     parser.add_argument(
         "--principal-details", action="store_true",
@@ -611,9 +617,22 @@ def main(argv=None) -> int:
         return _scrape_principal_details(args)
 
     legislatures = LEGISLATURES if args.all else args.legislatures
+
+    refresh = args.refresh
+    if args.refresh_legislature:
+        progress = load_progress()
+        before = set(progress.get("done", []))
+        wanted = set(legislatures)
+        keep = {token for token in before if token.split("/", 1)[0] not in wanted}
+        dropped = len(before) - len(keep)
+        progress["done"] = sorted(keep)
+        save_progress(progress)
+        print(f"  --refresh-legislature: dropped {dropped:,} checkpoint token(s) for {legislatures}")
+        refresh = True
+
     summary = scrape_positions(
         legislatures, args.max_number, prefixes=tuple(args.prefixes),
-        delay=args.delay, refresh=args.refresh,
+        delay=args.delay, refresh=refresh,
     )
     for label, value in summary.items():
         print(f"  {label:16} {value:>8}" if isinstance(value, str) else f"  {label:16} {value:>8,}")

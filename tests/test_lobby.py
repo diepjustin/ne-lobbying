@@ -283,3 +283,35 @@ def test_exit_status_tells_the_chain_what_happened():
     from lobby import OUTCOME_EXIT
 
     assert OUTCOME_EXIT == {"complete": 0, "stopped": 2, "interrupted": 130}
+
+
+def test_refresh_legislature_drops_only_that_legislatures_tokens(tmp_path, monkeypatch):
+    """--refresh-legislature exists so a late correction to one historical
+    session (e.g. the Legislature quietly fixing a filing) can be re-swept
+    without redoing the other six. It must not touch other legislatures'
+    checkpoints, and it must force a cache bypass so the re-fetch is real."""
+    import lobby
+
+    progress_path = tmp_path / "progress.json"
+    lobby.save_progress(
+        {"done": ["109/LB1", "109/LB2", "108/LB1"], "positions": 3}, progress_path
+    )
+    monkeypatch.setattr(lobby, "PROGRESS_PATH", progress_path)
+
+    captured = {}
+
+    def _stub_scrape_positions(legislatures, max_number, **kwargs):
+        captured["legislatures"] = legislatures
+        captured["refresh"] = kwargs.get("refresh")
+        return {"outcome": "complete", "rows_collected": 0, "bills_checked": 0,
+                "requests_made": 0, "cache_hits": 0, "rate_limit_waits": 0,
+                "network_retries": 0}
+
+    monkeypatch.setattr(lobby, "scrape_positions", _stub_scrape_positions)
+
+    lobby.main(["--legislatures", "109", "--max-number", "1", "--refresh-legislature"])
+
+    assert captured["legislatures"] == ["109"]
+    assert captured["refresh"] is True
+    remaining = lobby.load_progress(progress_path)["done"]
+    assert remaining == ["108/LB1"]  # 109's tokens dropped, 108's kept
