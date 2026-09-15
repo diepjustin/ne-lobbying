@@ -25,6 +25,10 @@ PROGRESS = ROOT / "data" / "scrape_progress.json"
 DETAILS = ROOT / "data" / "principal_details.csv"
 STATEWIDE = ROOT / "data" / "expenses_statewide.csv"
 OUT = ROOT / "index.html"
+# Per-principal position detail, fetched by ../ne-connect/ so a cross-source
+# entity's page can show every registered position inline instead of just a
+# link back here -- this page itself stays a static report, not a search UI.
+POSITIONS_OUT = ROOT / "d" / "positions.json"
 
 # Every regular session runs to about LB1300 and LR500; specials to a few dozen.
 PLANNED_BILLS = 6600 + 2600
@@ -75,6 +79,37 @@ STYLE = """
 """
 
 
+def build_positions_index(rows):
+    """principal_id -> every registered position, for ne-connect's fetch.
+
+    Same dedup as ne-connect/ingest/sources.py load_lobbying_principals():
+    the Legislature's own pages list some registrations twice (15% of a real
+    sample), so `(legislature, bill, registration_id, position)` -- not the
+    raw row -- is the natural key. Row shape:
+    [legislature, bill, position, lobbyist, registration_id].
+    """
+    by_principal = collections.defaultdict(list)
+    seen = set()
+    for row in rows:
+        principal_id = (row.get("principal_id") or "").strip()
+        if not principal_id:
+            continue
+        key = (row.get("legislature"), row.get("bill"), row.get("registration_id"), row.get("position"))
+        if key in seen:
+            continue
+        seen.add(key)
+        by_principal[principal_id].append(
+            [
+                row.get("legislature", ""),
+                row.get("bill", ""),
+                row.get("position", ""),
+                row.get("lobbyist", ""),
+                row.get("registration_id", ""),
+            ]
+        )
+    return dict(by_principal)
+
+
 def main() -> int:
     if not POSITIONS.exists():
         print("no data/bill_positions.csv -- run scripts/lobby.py first")
@@ -82,6 +117,11 @@ def main() -> int:
 
     with POSITIONS.open(encoding="utf-8", newline="") as fh:
         rows = list(csv.DictReader(fh))
+
+    positions_index = build_positions_index(rows)
+    POSITIONS_OUT.parent.mkdir(parents=True, exist_ok=True)
+    positions_payload = json.dumps(positions_index, separators=(",", ":"))
+    POSITIONS_OUT.write_text(positions_payload, encoding="utf-8")
 
     names = {}
     if DETAILS.exists():
@@ -253,6 +293,8 @@ def main() -> int:
 """
     OUT.write_text(html, encoding="utf-8")
     print(f"  {len(rows):,} positions, {pct:.0%} swept  ->  {OUT.name} ({len(html) / 1024:.0f} KB)")
+    print(f"  {len(positions_index):,} principals  ->  d/{POSITIONS_OUT.name}"
+          f" ({len(positions_payload) / 1024:.0f} KB)")
     return 0
 
 
