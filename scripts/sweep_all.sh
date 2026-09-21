@@ -78,10 +78,11 @@ $PY scripts/check_data.py && $PY scripts/build_site.py || true
 
 # --- 2. statewide expense totals -------------------------------------------
 # Two requests per year. Cheap enough to redo every run, and it keeps the
-# published series current. The file is rewritten, not appended, so rerunning
-# never doubles it.
+# published series current -- only with --refresh, though: without it every
+# form-year is a permanent cache hit and the current year never moves. The
+# file is rewritten, not appended, so rerunning never doubles it.
 echo "=== statewide expense totals at $(date) ==="
-run_until_complete $PY scripts/expenses.py --aggregate --from-year 2015 --delay 2.5
+run_until_complete $PY scripts/expenses.py --aggregate --from-year 2015 --delay 2.5 --refresh
 stop_if_interrupted $?
 
 # --- 3. per-entity expense reports -----------------------------------------
