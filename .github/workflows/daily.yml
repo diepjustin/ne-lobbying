@@ -28,7 +28,7 @@ jobs:
     # rails in README.md for why a full sweep is roughly a day.
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Pick the DST-correct cron entry, and today's tier
         id: gate
