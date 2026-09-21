@@ -75,7 +75,7 @@ jobs:
           echo "year=$year" >> "$GITHUB_OUTPUT"
           echo "Central offset $offset -> proceed=$proceed weekly=$weekly monthly=$monthly year=$year"
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: steps.gate.outputs.proceed == 'true'
         with:
           python-version: '3.11'
