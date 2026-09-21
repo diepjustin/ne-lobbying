@@ -12,7 +12,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write  # for `gh release create` (monthly backup); read covers the rest
   actions: write   # for `gh cache delete` cleanup
 
 concurrency:
@@ -102,7 +102,7 @@ jobs:
       # finance a cache miss here must NOT just redownload -- fall back to the
       # last GitHub Release backup (PLAN.md 0.5) instead of starting cold.
       - name: Restore from the release backup on a cache miss
-        if: steps.gate.outputs.proceed == 'true' && steps.restore.outputs.cache-hit != 'true'
+        if: steps.gate.outputs.proceed == 'true' && steps.restore.outputs.cache-matched-key == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
