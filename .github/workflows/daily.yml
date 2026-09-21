@@ -91,7 +91,7 @@ jobs:
       - name: Restore data/ cache
         if: steps.gate.outputs.proceed == 'true'
         id: restore
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: data
           key: ne-lobbying-data-${{ github.run_id }}
@@ -163,7 +163,7 @@ jobs:
 
       - name: Save data/ cache
         if: always() && steps.cachecheck.outputs.ok == 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: data
           key: ne-lobbying-data-${{ github.run_id }}-${{ github.run_attempt }}
